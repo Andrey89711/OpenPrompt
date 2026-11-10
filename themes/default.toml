@@ -1,0 +1,20 @@
+# OpenPrompt configuration. Themes: minimal, classic, blocks.
+theme = "classic"
+# Enable only with a Nerd Font configured in your terminal.
+icons = false
+
+[directory]
+enabled = true
+max_width = 40
+
+[git]
+enabled = true
+# Git checks are skipped if this time budget is exceeded.
+timeout_ms = 150
+
+[duration]
+enabled = true
+min_ms = 1000
+
+[status]
+enabled = true

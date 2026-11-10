@@ -1,0 +1,11 @@
+/target/
+.env
+.env.*
+!.env.example
+*.local
+*.log
+*.pem
+*.key
+*.pfx
+.DS_Store
+Thumbs.db
