@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Fix a Windows-only mutable binding that caused Linux/macOS Clippy checks to
+  reject an otherwise successful build with `-D warnings`.
+
 ## 0.2.0
 
 - Deterministic theme previews, including JSON/ANSI output for integrations.

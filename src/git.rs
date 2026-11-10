@@ -18,12 +18,15 @@ pub struct GitStatus {
 const MAX_OUTPUT: usize = 64 * 1024;
 
 fn git_command() -> Command {
-    let mut command = Command::new("git");
+    let command = Command::new("git");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        let mut command = command;
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        command
     }
+    #[cfg(not(windows))]
     command
 }
 
