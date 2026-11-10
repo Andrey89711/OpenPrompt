@@ -11,8 +11,9 @@ or another ANSI-capable terminal.
 >
 ```
 
-**v0.1:** PowerShell integration, three themes, TOML configuration, directory/Git/status/duration segments.
-Bash/Zsh integrations, runtime versions, and a theme editor are not implemented yet.
+**v0.2:** theme previews and selection, configurable colors/symbols/order, contextual
+runtime/environment/session segments, detailed Git counts, bounded caches, and
+release packaging. Bash/Zsh integrations are not implemented yet.
 
 ## Install from source
 
@@ -65,6 +66,9 @@ whichever replaces `prompt` last takes over.
 
 ```powershell
 openprompt themes
+openprompt preview
+openprompt preview --theme blocks
+openprompt theme set blocks
 openprompt render --theme minimal
 openprompt render --theme classic
 openprompt render --theme blocks
@@ -78,6 +82,27 @@ openprompt render --theme blocks
 
 No special font is required by default. For optional icons, install and select a
 Nerd Font in your terminal, then set `icons = true`. OpenPrompt does not install fonts.
+
+`preview` uses deterministic sample data with a Git branch, staged file, failed
+command, duration, environment, and Node version. It never runs project tools.
+`preview --theme classic --json` returns `{theme, ansi, text}` for safe integrations.
+The ANSI output is terminal text, not HTML.
+
+### Customize without editing TOML
+
+```powershell
+openprompt style set --success-symbol '>' --error-symbol '!' --layout two-line
+openprompt style set --color directory=bright-cyan --color git=magenta
+openprompt style set --order session,directory,git,environment,runtime,duration,status
+openprompt style set --icons true
+```
+
+Layouts: `auto`, `one-line`, `two-line`. Colors: black, red, green, yellow, blue,
+magenta, cyan, white, and their `bright-` variants. Symbols accept 1–8 printable
+columns. Segment names omitted from `--order` are hidden. Icons still require a
+compatible font. `theme set` and `style set` preserve comments/unrelated settings,
+validate the whole document, and use atomic replacement; they do not repair invalid
+existing configurations or edit symlink files.
 
 ## Configuration
 
@@ -102,7 +127,8 @@ max_width = 40
 
 [git]
 enabled = true
-timeout_ms = 150
+timeout_ms = 300
+cache_ms = 1000
 
 [duration]
 enabled = true
@@ -110,6 +136,30 @@ min_ms = 1000
 
 [status]
 enabled = true
+
+[runtime]
+enabled = true
+timeout_ms = 250
+
+[environment]
+enabled = true
+
+[session]
+enabled = true
+
+[prompt]
+success_symbol = ">"
+error_symbol = ">"
+layout = "auto"
+
+[colors]
+directory = "cyan"
+git = "magenta"
+success = "green"
+error = "red"
+
+[segments]
+order = ["session", "directory", "git", "environment", "runtime", "duration", "status"]
 ```
 
 Preview an alternative configuration with `openprompt --config ./custom.toml render`.
@@ -124,16 +174,55 @@ The file location is converted to an absolute path during initialization.
 ### Segment behavior
 
 - **Directory:** shortens the home directory to `~` and truncates long paths.
-- **Git:** branch (or short detached commit), `*` for changes, `+N` ahead, `-N` behind
-  the configured upstream. No network requests. Internal submodule changes are skipped.
+- **Git:** branch (or short detached commit), `*` for changes, `staged:N`,
+  `modified:N`, `new:N`, `conflicts:N`, `+N` ahead, `-N` behind the configured upstream.
+  Counts describe status entries, not changed lines. No network requests.
+  Internal submodule changes are skipped.
 - **Status:** `exit:N` for an unsuccessful command; the input symbol also turns red.
   PowerShell cmdlet failures may only provide a success/failure flag, not a native exit code.
 - **Duration:** elapsed execution time from PowerShell command history, not idle time.
   Hosts that do not provide history omit it; repeated prompts may reuse the last history entry.
+- **Runtime:** Node for `package.json`, Python for `pyproject.toml`/`requirements.txt`/
+  `Pipfile`/`.python-version`, Rust for `Cargo.toml`/`rust-toolchain.toml` in the
+  working directory or up to 12 ancestors. Probes use trusted executables in
+  absolute PATH entries, not project scripts. All uncached probes share a budget.
+  Probes run outside the project: Python isolated mode disables startup modules,
+  Node preload options are removed, and rustup automatic toolchain downloads are
+  disabled. Rust shows the selected non-project/default toolchain, not necessarily
+  a repository's override. A slow or missing tool is simply omitted.
+- **Environment:** active `VIRTUAL_ENV` basename or `CONDA_DEFAULT_ENV` as `env:name`.
+- **Session:** `ssh` from SSH environment variables; `admin` from a Windows token
+  check at PowerShell initialization. This marker is only a display hint, not an
+  authorization check; it is not evidence of elevated privileges for other code.
 
 Git output is bounded to 64 KiB and checks have a configurable time budget. Missing
 Git, inaccessible repositories, or timeout simply omit the segment. Rendering still
 starts a native process each time; performance depends on your machine and repository.
+Repositories exceeding the Git output limit omit that segment rather than showing
+inaccurate partial counts. Filesystem operations (especially on network shares)
+are not protected by a hard end-to-end timeout; process budgets are not a guarantee
+that an unavailable drive cannot stall the operating system.
+
+### Cache and latency
+
+Git results can be reused for `git.cache_ms` (default 1000, maximum 5000). Changes
+to HEAD/index invalidate ordinary-repository entries; worktrees/gitfiles and working
+file changes can remain stale until TTL expiry. Set `cache_ms = 0` or use
+`openprompt render --fresh` for fresh Git data. Successful runtime version probes
+are cached for up to 60 seconds with executable metadata/toolchain verification;
+failed probes are not cached. Runtime cache bypass is not implied by `--fresh`.
+
+```powershell
+openprompt cache clear
+.\scripts\benchmark.ps1 -Executable .\target\release\openprompt.exe -Path . -Iterations 20
+```
+
+Caches live under the OS cache directory in `openprompt/git-v1` and
+`openprompt/runtime-v1`. They persist local paths, branch names, executable metadata,
+and version labels, not project file contents. Caching is best effort and can be
+unavailable on read-only hosts. `cache clear` deletes recognized cache files only.
+See [benchmark methodology and distribution](docs/distribution.md).
+Measured local results and limitations are recorded in [performance notes](docs/performance.md).
 
 `--no-color`, the presence of `NO_COLOR`, or `TERM=dumb` disables ANSI colors.
 Directory and branch names have terminal control and bidirectional control characters removed.
@@ -171,9 +260,24 @@ not by double-clicking the executable.
 ## Roadmap
 
 - Bash and Zsh integration, with correct nonprinting-character markers.
-- Additional runtime/environment segments with bounded execution and caching.
-- Theme preview and configuration in OpenTerminal.
-- More shell-host tests and measured startup benchmarks.
+- Additional shell hosts, network-drive testing, and more performance measurements.
+- Package-manager submissions after verified releases and manifest review.
+
+## OpenTerminal integration
+
+[OpenTerminal](https://github.com/Andrey89711/OpenTerminal) has an OpenPrompt
+settings panel with executable discovery, theme selection and a read-only live
+preview. Theme persistence requires clicking Save. Session initialization requires
+explicit confirmation and is available only for a PowerShell tab. It does not
+change your profile. Install/select a Nerd Font yourself if you enable icons.
+
+## Releases and installation
+
+Version tags trigger Windows/Linux/macOS archive builds and SHA256 checksums.
+See [distribution instructions](docs/distribution.md) for verified local ZIP
+installation and release automation. Binaries are not code-signed or notarized.
+Scoop/WinGet publication requires separate validated submissions; those listings
+are not claimed here.
 
 ## License
 

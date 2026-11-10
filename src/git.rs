@@ -3,12 +3,16 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GitStatus {
     pub branch: String,
     pub dirty: bool,
     pub ahead: u32,
     pub behind: u32,
+    pub staged: u32,
+    pub modified: u32,
+    pub untracked: u32,
+    pub conflicts: u32,
 }
 
 const MAX_OUTPUT: usize = 64 * 1024;
@@ -21,6 +25,23 @@ fn git_command() -> Command {
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     command
+}
+
+/// Detect status using a short-lived, best-effort disk cache.
+pub fn detect_cached(path: &Path, timeout: Duration, cache_ms: u64) -> Option<GitStatus> {
+    if cache_ms == 0 {
+        return detect(path, timeout);
+    }
+    let absolute = match path.canonicalize() {
+        Ok(path) => path,
+        Err(_) => return detect(path, timeout),
+    };
+    if let Some(status) = crate::cache::get(&absolute, cache_ms) {
+        return Some(status);
+    }
+    let status = detect(path, timeout)?;
+    crate::cache::put(&absolute, &status);
+    Some(status)
 }
 
 /// Detect repository status without modifying the index or waiting indefinitely.
@@ -151,10 +172,19 @@ fn parse_status(bytes: &[u8]) -> Option<GitStatus> {
             status.behind = behind.parse().ok()?;
         } else if line.starts_with(b"# ") || line.starts_with(b"! ") {
             // Other porcelain headers (e.g. upstream) and ignored entries.
-        } else if [b"1 ".as_slice(), b"2 ", b"u ", b"? "]
-            .iter()
-            .any(|prefix| line.starts_with(prefix) && line.len() > prefix.len())
-        {
+        } else if line.starts_with(b"1 ") || line.starts_with(b"2 ") {
+            let xy = line.get(2..4)?;
+            if line.get(4) != Some(&b' ') || !xy.iter().all(|byte| b".MTADRCU".contains(byte)) {
+                return None;
+            }
+            status.staged += u32::from(xy[0] != b'.');
+            status.modified += u32::from(xy[1] != b'.');
+            status.dirty = true;
+        } else if line.starts_with(b"u ") && line.len() > 2 {
+            status.conflicts += 1;
+            status.dirty = true;
+        } else if line.starts_with(b"? ") && line.len() > 2 {
+            status.untracked += 1;
             status.dirty = true;
         } else {
             return None;
@@ -200,7 +230,7 @@ mod tests {
 
     #[test]
     fn dirty_entries_and_divergence() {
-        for entry in ["1 tracked", "2 renamed", "u conflict", "? untracked"] {
+        for entry in ["1 M. tracked", "2 R. renamed", "u conflict", "? untracked"] {
             let text = output(
                 "main",
                 &format!("# branch.upstream origin/main\n# branch.ab +12 -3\n{entry}\n"),
@@ -212,6 +242,22 @@ mod tests {
         let mut text = output("main", "? ").into_bytes();
         text.extend_from_slice(&[0xff, b'\n']);
         assert!(parse_status(&text).unwrap().dirty);
+    }
+
+    #[test]
+    fn counts_each_status_kind() {
+        let status = parse_status(output("main", "1 M. staged\n1 .M modified\n1 MM both\n2 R. renamed\nu UU conflict\n? new\n? another\n").as_bytes()).unwrap();
+        assert_eq!(
+            (
+                status.staged,
+                status.modified,
+                status.untracked,
+                status.conflicts
+            ),
+            (3, 2, 2, 1)
+        );
+        assert!(status.dirty);
+        assert!(parse_status(output("main", "1 invalid\n").as_bytes()).is_none());
     }
 
     #[test]
@@ -288,12 +334,16 @@ mod tests {
         };
         let timeout = Duration::from_secs(10);
         assert_eq!(detect(&repo.0, timeout), None);
+        assert_eq!(detect_cached(&repo.0, timeout, 0), None);
         assert!(run(&repo.0, &[OsStr::new("init"), OsStr::new("--quiet")]));
         let unborn = detect(&repo.0, timeout).unwrap();
+        assert_eq!(detect_cached(&repo.0, timeout, 0), Some(unborn.clone()));
         assert!(!unborn.branch.is_empty());
         assert!(!unborn.dirty);
         std::fs::write(repo.0.join("tracked.txt"), "first\n").unwrap();
-        assert!(detect(&repo.0, timeout).unwrap().dirty);
+        let untracked = detect(&repo.0, timeout).unwrap();
+        assert!(untracked.dirty);
+        assert_eq!(untracked.untracked, 1);
         assert!(run(
             &repo.0,
             &[
@@ -302,6 +352,7 @@ mod tests {
                 OsStr::new("tracked.txt")
             ]
         ));
+        assert_eq!(detect(&repo.0, timeout).unwrap().staged, 1);
         let args = [
             "-c",
             "user.name=Openprompt Test",

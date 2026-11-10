@@ -1,5 +1,5 @@
 use crate::{
-    config::{Config, Theme},
+    config::{color_code, Config, Layout, Theme},
     git::GitStatus,
 };
 use std::path::Path;
@@ -13,6 +13,7 @@ pub struct Context<'a> {
     pub width: usize,
     pub color: bool,
     pub git: Option<&'a GitStatus>,
+    pub extra: &'a [String],
 }
 
 // Never let repository names or directory names inject terminal commands,
@@ -65,13 +66,36 @@ fn duration(ms: u64) -> String {
 }
 
 struct Segment {
+    kind: &'static str,
     text: String,
-    foreground: &'static str,
-    background: &'static str,
+    foreground: u8,
 }
 
 pub fn render(config: &Config, context: &Context<'_>) -> String {
-    let budget = context.width.clamp(10, 1000).saturating_sub(4);
+    let (symbol, symbol_color) = if context.status == 0 {
+        (
+            &config.prompt.success_symbol,
+            color_code(&config.colors.success).unwrap_or(32),
+        )
+    } else {
+        (
+            &config.prompt.error_symbol,
+            color_code(&config.colors.error).unwrap_or(31),
+        )
+    };
+    let symbol = if config.icons && symbol == ">" {
+        "❯"
+    } else {
+        symbol.as_str()
+    };
+    let one_line = config.prompt.layout == Layout::OneLine
+        || (config.prompt.layout == Layout::Auto && config.theme == Theme::Minimal);
+    let width = context.width.clamp(10, 1000);
+    let budget = width.saturating_sub(if one_line {
+        UnicodeWidthStr::width(symbol) + 3
+    } else {
+        1
+    });
     let mut segments = Vec::new();
     if config.directory.enabled {
         let path = directory(
@@ -80,13 +104,13 @@ pub fn render(config: &Config, context: &Context<'_>) -> String {
             config.directory.max_width.min(budget),
         );
         segments.push(Segment {
+            kind: "directory",
             text: if config.icons {
                 format!("\u{f07b} {path}")
             } else {
                 path
             },
-            foreground: "36",
-            background: "44",
+            foreground: color_code(&config.colors.directory).unwrap_or(36),
         });
     }
     if config.git.enabled {
@@ -100,6 +124,18 @@ pub fn render(config: &Config, context: &Context<'_>) -> String {
             if git.dirty {
                 text.push('*');
             }
+            if git.staged > 0 {
+                text.push_str(&format!(" staged:{}", git.staged));
+            }
+            if git.modified > 0 {
+                text.push_str(&format!(" modified:{}", git.modified));
+            }
+            if git.untracked > 0 {
+                text.push_str(&format!(" new:{}", git.untracked));
+            }
+            if git.conflicts > 0 {
+                text.push_str(&format!(" conflicts:{}", git.conflicts));
+            }
             if git.ahead > 0 {
                 text.push_str(&format!(" +{}", git.ahead));
             }
@@ -107,26 +143,58 @@ pub fn render(config: &Config, context: &Context<'_>) -> String {
                 text.push_str(&format!(" -{}", git.behind));
             }
             segments.push(Segment {
+                kind: "git",
                 text,
-                foreground: "35",
-                background: "45",
+                foreground: color_code(&config.colors.git).unwrap_or(35),
             });
         }
     }
     if config.duration.enabled && context.duration_ms >= config.duration.min_ms {
         segments.push(Segment {
+            kind: "duration",
             text: duration(context.duration_ms),
-            foreground: "33",
-            background: "43",
+            foreground: color_code(&config.colors.duration).unwrap_or(33),
         });
     }
     if config.status.enabled && context.status != 0 {
         segments.push(Segment {
+            kind: "status",
             text: format!("exit:{}", context.status),
-            foreground: "31",
-            background: "41",
+            foreground: color_code(&config.colors.status).unwrap_or(31),
         });
     }
+    for extra in context.extra {
+        let (kind, color) = if extra.starts_with("venv:")
+            || extra.starts_with("conda:")
+            || extra.starts_with("env:")
+        {
+            ("environment", &config.colors.environment)
+        } else if extra == "ssh" || extra == "admin" {
+            ("session", &config.colors.session)
+        } else {
+            ("runtime", &config.colors.runtime)
+        };
+        segments.push(Segment {
+            kind,
+            text: sanitize(extra),
+            foreground: color_code(color).unwrap_or(34),
+        });
+    }
+    segments.retain(|segment| {
+        config
+            .segments
+            .order
+            .iter()
+            .any(|name| name == segment.kind)
+    });
+    segments.sort_by_key(|segment| {
+        config
+            .segments
+            .order
+            .iter()
+            .position(|name| name == segment.kind)
+            .unwrap_or(usize::MAX)
+    });
     let mut info = String::new();
     let mut used = 0;
     for segment in segments {
@@ -146,14 +214,16 @@ pub fn render(config: &Config, context: &Context<'_>) -> String {
         }
         if config.theme == Theme::Blocks {
             if context.color {
-                let foreground = if segment.background == "43" {
-                    "30"
+                let foreground = if [32, 33, 36, 37, 92, 93, 96, 97].contains(&segment.foreground) {
+                    30
                 } else {
-                    "97"
+                    97
                 };
                 info.push_str(&format!(
                     "\x1b[{};{}m {} \x1b[0m",
-                    foreground, segment.background, text
+                    foreground,
+                    segment.foreground + 10,
+                    text
                 ));
             } else {
                 info.push_str(&format!(" {text} "));
@@ -170,8 +240,6 @@ pub fn render(config: &Config, context: &Context<'_>) -> String {
         }
         used += padding + text_width;
     }
-    let symbol = if config.icons { "❯" } else { ">" };
-    let symbol_color = if context.status == 0 { "32" } else { "31" };
     let symbol = if context.color {
         format!("\x1b[{symbol_color}m{symbol}\x1b[0m ")
     } else {
@@ -180,9 +248,10 @@ pub fn render(config: &Config, context: &Context<'_>) -> String {
     if info.is_empty() {
         return symbol;
     }
-    match config.theme {
-        Theme::Minimal => format!("{info} {symbol}"),
-        Theme::Classic | Theme::Blocks => format!("{info}\n{symbol}"),
+    if one_line {
+        format!("{info} {symbol}")
+    } else {
+        format!("{info}\n{symbol}")
     }
 }
 
@@ -199,6 +268,7 @@ mod tests {
             width: 80,
             color: false,
             git: None,
+            extra: &[],
         }
     }
 
@@ -233,6 +303,7 @@ mod tests {
             dirty: true,
             ahead: 2,
             behind: 1,
+            ..GitStatus::default()
         };
         let mut ctx = context(Path::new("project"));
         ctx.git = Some(&git);
@@ -280,5 +351,32 @@ mod tests {
         assert!(render(&config, &ctx).contains("\x1b[0m"));
         config.directory.enabled = false;
         assert_eq!(render(&config, &context(Path::new("project"))), "> ");
+    }
+
+    #[test]
+    fn custom_order_symbols_colors_and_long_symbol_width_are_respected() {
+        let config = crate::config::parse("theme = 'minimal'\n[prompt]\nsuccess_symbol = '12345678'\n[segments]\norder = ['status', 'directory']\n[colors]\ndirectory = 'bright-cyan'").unwrap();
+        let mut ctx = context(Path::new("long-directory-name"));
+        ctx.width = 20;
+        let output = render(&config, &ctx);
+        assert!(output.ends_with("12345678 "));
+        assert!(UnicodeWidthStr::width(output.as_str()) < 20);
+        ctx.color = true;
+        assert!(render(&config, &ctx).contains("\x1b[96m"));
+    }
+
+    #[test]
+    fn extra_segment_text_is_sanitized_and_ordered() {
+        let extras = vec![
+            "env:demo\x1b[31m".into(),
+            "node:v22.0.0".into(),
+            "ssh".into(),
+        ];
+        let mut ctx = context(Path::new("project"));
+        ctx.extra = &extras;
+        let output = render(&Config::default(), &ctx);
+        assert!(output.starts_with("ssh  project"));
+        assert!(!output.contains('\x1b'));
+        assert!(output.contains("env:demo"));
     }
 }

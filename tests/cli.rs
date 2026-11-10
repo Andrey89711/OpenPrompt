@@ -146,3 +146,104 @@ fn explicit_config_and_segment_toggles_apply() {
     assert!(result.status.success());
     assert_eq!(result.stdout, b"> ");
 }
+
+#[test]
+fn preview_has_sample_context_and_json_never_contains_html() {
+    let sandbox = Sandbox::new();
+    let output = sandbox.run(&["preview", "--no-color"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    for name in ["minimal", "classic", "blocks", "git:main", "exit:1"] {
+        assert!(text.contains(name), "{text}");
+    }
+    assert!(!sandbox.0.join("openprompt/config.toml").exists());
+    let output = sandbox.run(&["preview", "--theme", "blocks", "--json"]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["theme"], "blocks");
+    assert!(value["ansi"].as_str().unwrap().contains('\x1b'));
+    assert!(!value["text"].as_str().unwrap().contains('\x1b'));
+    assert!(!sandbox.run(&["preview", "--json"]).status.success());
+}
+
+#[test]
+fn theme_and_style_set_preserve_comments_and_reject_bad_edits() {
+    let sandbox = Sandbox::new();
+    let path = sandbox.0.join("custom.toml");
+    fs::write(
+        &path,
+        "# keep this comment\ntheme = 'classic'\n[git]\nenabled = false # keep this too\n",
+    )
+    .unwrap();
+    let result = sandbox.run(&["--config", "custom.toml", "theme", "set", "blocks"]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("keep this comment"));
+    assert!(text.contains("keep this too"));
+    assert!(text.contains("blocks"));
+    let result = sandbox.run(&[
+        "--config",
+        "custom.toml",
+        "style",
+        "set",
+        "--success-symbol",
+        ">>",
+        "--error-symbol",
+        "!",
+        "--layout",
+        "one-line",
+        "--color",
+        "directory=bright-cyan",
+        "--order",
+        "status,directory",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let result = sandbox.run(&[
+        "--config",
+        "custom.toml",
+        "render",
+        "--path",
+        "demo",
+        "--status",
+        "9",
+    ]);
+    let text = String::from_utf8(result.stdout).unwrap();
+    assert_eq!(text.lines().count(), 1);
+    assert!(text.starts_with(" exit:9 "));
+    assert!(text.ends_with("! "));
+    let before = fs::read(&path).unwrap();
+    for args in [
+        vec!["--color", "directory=invalid"],
+        vec!["--success-symbol", "\x1b[31m"],
+        vec!["--order", "git,git"],
+    ] {
+        let mut command = sandbox.command();
+        let result = command
+            .args(["--config", "custom.toml", "style", "set"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn theme_set_creates_missing_config_but_refuses_invalid_existing_structure() {
+    let sandbox = Sandbox::new();
+    assert!(sandbox.run(&["theme", "set", "minimal"]).status.success());
+    assert!(sandbox.run(&["config", "check"]).status.success());
+    let path = sandbox.0.join("openprompt/config.toml");
+    fs::write(&path, "prompt = 1\n").unwrap();
+    let result = sandbox.run(&["style", "set", "--success-symbol", "!"]);
+    assert!(!result.status.success());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "prompt = 1\n");
+}

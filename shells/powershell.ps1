@@ -3,6 +3,20 @@
 $global:OpenPromptExecutable = __OPENPROMPT_EXECUTABLE__
 $global:OpenPromptConfig = __OPENPROMPT_CONFIG__
 
+# A display hint only: never use this environment marker for authorization.
+# Check the actual Windows token once, rather than spawning whoami per prompt.
+try {
+    if ($env:OS -eq 'Windows_NT') {
+        $openPromptIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        try {
+            $openPromptPrincipal = New-Object Security.Principal.WindowsPrincipal($openPromptIdentity)
+            $env:OPENPROMPT_ADMIN = $(if ($openPromptPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { '1' } else { '0' })
+        } finally { $openPromptIdentity.Dispose() }
+    }
+} catch {
+    $env:OPENPROMPT_ADMIN = '0'
+}
+
 # Keep the first prompt even when initialization is evaluated more than once.
 if ($null -eq (Get-Variable -Name OpenPromptOriginalPrompt -Scope Global -ErrorAction SilentlyContinue)) {
     $openPromptOriginal = Get-Item -Path Function:\prompt -ErrorAction SilentlyContinue

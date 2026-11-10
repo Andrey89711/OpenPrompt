@@ -9,3 +9,9 @@
 *.pfx
 .DS_Store
 Thumbs.db
+/THIRD_PARTY_NOTICES.txt
+/openprompt-*.zip
+/openprompt-*.tar.gz
+/package/
+/dist/
+__pycache__/

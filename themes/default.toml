@@ -10,7 +10,9 @@ max_width = 40
 [git]
 enabled = true
 # Git checks are skipped if this time budget is exceeded.
-timeout_ms = 150
+timeout_ms = 300
+# Reuse Git results for up to one second. Set 0 to disable caching.
+cache_ms = 1000
 
 [duration]
 enabled = true
@@ -18,3 +20,33 @@ min_ms = 1000
 
 [status]
 enabled = true
+
+[runtime]
+enabled = true
+# Shared budget for contextual Node/Python/Rust version probes.
+timeout_ms = 250
+
+[environment]
+enabled = true
+
+[session]
+enabled = true
+
+[prompt]
+success_symbol = ">"
+error_symbol = ">"
+layout = "auto" # auto | one-line | two-line
+
+[colors]
+directory = "cyan"
+git = "magenta"
+duration = "yellow"
+status = "red"
+runtime = "blue"
+environment = "green"
+session = "yellow"
+success = "green"
+error = "red"
+
+[segments]
+order = ["session", "directory", "git", "environment", "runtime", "duration", "status"]
