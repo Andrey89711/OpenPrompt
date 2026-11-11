@@ -15,6 +15,34 @@ or another ANSI-capable terminal.
 runtime/environment/session segments, detailed Git counts, bounded caches, and
 release packaging. Bash/Zsh integrations are not implemented yet.
 
+## See it in action
+
+![OpenPrompt minimal, classic and blocks themes with Git, environment, runtime, duration and exit status](docs/images/themes.png)
+
+Real ANSI output from `openprompt preview --theme <name> --json`, rendered in
+OpenTerminal's browser screenshot harness. The directory, Git branch, environment,
+runtime and failure are deterministic demo data, not a live project or benchmark.
+No terminal-specific integration is required; colors depend on your terminal palette.
+
+```powershell
+openprompt preview --theme minimal
+openprompt preview --theme classic
+openprompt preview --theme blocks
+```
+
+Reading the example:
+
+| Segment | Example | Meaning |
+| --- | --- | --- |
+| Directory | `Projects/OpenPrompt` | Current working directory |
+| Git | `git:main* staged:1 +2` | Branch, dirty tree, one staged entry, two commits ahead |
+| Environment | `venv:demo` | Active demo environment (preview label) |
+| Runtime | `node:v22.0.0` | Detected project runtime (sample version) |
+| Duration | `1.2s` | Previous command duration |
+| Status | `exit:1` | Previous command failed |
+
+Preview labels are fixed samples; actual Python/Conda environments use `env:name`.
+
 ## Install from source
 
 Requirements: stable Rust, Cargo, PowerShell. Git is optional (only the Git segment needs it).
@@ -90,7 +118,17 @@ The ANSI output is terminal text, not HTML.
 
 ### Customize without editing TOML
 
+For a compact prompt, preview first, then explicitly save your choice:
+
 ```powershell
+openprompt preview --theme minimal
+openprompt theme set minimal
+```
+
+For colored blocks with custom symbols:
+
+```powershell
+openprompt theme set blocks
 openprompt style set --success-symbol '>' --error-symbol '!' --layout two-line
 openprompt style set --color directory=bright-cyan --color git=magenta
 openprompt style set --order session,directory,git,environment,runtime,duration,status
@@ -170,6 +208,28 @@ Invoke-Expression (& openprompt --config ./custom.toml init powershell | Out-Str
 ```
 
 The file location is converted to an absolute path during initialization.
+
+### Try a complete example without overwriting your settings
+
+From a checkout of this repository, use the included
+[`docs/examples/compact.toml`](docs/examples/compact.toml):
+
+```powershell
+openprompt --config .\docs\examples\compact.toml config check
+openprompt --config .\docs\examples\compact.toml preview --theme minimal
+openprompt --config .\docs\examples\compact.toml render --fresh
+```
+
+The example uses a single line, cyan directory, Git information and `!` for errors;
+runtime/environment segments are hidden. `preview` supplies sample context, while
+`render` reads your actual directory and Git state. These commands do not enable
+the prompt or edit your default configuration. To try it in the current session:
+
+```powershell
+Invoke-Expression (& openprompt --config .\docs\examples\compact.toml init powershell | Out-String)
+# Restore the original prompt when done
+Disable-OpenPrompt
+```
 
 ### Segment behavior
 
@@ -263,13 +323,14 @@ not by double-clicking the executable.
 - Additional shell hosts, network-drive testing, and more performance measurements.
 - Package-manager submissions after verified releases and manifest review.
 
-## OpenTerminal integration
+## Independent terminal applications
 
-[OpenTerminal](https://github.com/Andrey89711/OpenTerminal) has an OpenPrompt
-settings panel with executable discovery, theme selection and a read-only live
-preview. Theme persistence requires clicking Save. Session initialization requires
-explicit confirmation and is available only for a PowerShell tab. It does not
-change your profile. Install/select a Nerd Font yourself if you enable icons.
+OpenPrompt is installed and configured separately from your terminal.
+[OpenTerminal](https://github.com/Andrey89711/OpenTerminal) does not bundle,
+discover, or initialize it automatically. Initialize OpenPrompt yourself in
+PowerShell using the commands above, in OpenTerminal or any other compatible
+terminal. A profile-based initialization belongs to PowerShell and can apply
+across terminal applications. Install/select a Nerd Font yourself if you enable icons.
 
 ## Releases and installation
 

@@ -1,0 +1,17 @@
+# Standalone demo configuration; does not modify your default config.
+theme = "minimal"
+icons = false
+
+[prompt]
+success_symbol = ">"
+error_symbol = "!"
+layout = "one-line"
+
+[colors]
+directory = "bright-cyan"
+git = "magenta"
+success = "green"
+error = "red"
+
+[segments]
+order = ["directory", "git", "duration", "status"]
